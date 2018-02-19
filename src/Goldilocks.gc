@@ -1,0 +1,373 @@
+
+#include <Goldilocks.hpp> 
+#include <cstring>
+#include <limits.h>
+#include <BCMath.hpp>
+
+
+
+EXEC SQL INCLUDE SQLCA;
+EXEC SQL INCLUDE ./GoldilocksStruct.hpp;
+
+#define CHECK_ERROR  checkSQLError ( ) 
+namespace exchange {
+
+
+
+static int checkSQLError ( ) 
+{
+
+  if ( sqlca.sqlcode != SQL_SUCCESS ) 
+  {
+    throw ExchangeDBException (sqlca.sqlerrm.sqlerrmc );
+  } 
+  return 0;
+}
+
+
+Goldilocks::Goldilocks (const std::string& aUser, 
+                        const std::string& aPassword, 
+                        const std::string& aDSN, 
+                        const int aLogOption, 
+                        const int aScale 
+                        ) : 
+     
+    mUser (aUser), mPassword (aPassword), 
+    mDSN(aDSN), mLogOption (aLogOption), 
+    mScale(aScale), mIsOpened ( 0 ) 
+  {} 
+
+Goldilocks::~Goldilocks () 
+{
+  for ( auto it = mQueryMap.begin () ; 
+       it != mQueryMap.end() ; ++it ) 
+  {
+    free( it->second ) ;
+  }
+}
+
+int Goldilocks :: OpenDatabase ()  
+{
+  const int MAX_STRING_LEN = 1024;
+  EXEC SQL BEGIN DECLARE SECTION ;
+  char sUserName [MAX_STRING_LEN];
+  char sPassword [MAX_STRING_LEN];
+  char sDSN [MAX_STRING_LEN] ;
+  EXEC SQL END   DECLARE SECTION ;
+
+  // Copy argument to host variables 
+  std::strncpy ( sUserName, mUser.c_str (), MAX_STRING_LEN) ;
+  std::strncpy ( sPassword, mPassword.c_str(), MAX_STRING_LEN);
+  std::strncpy ( sDSN, mDSN.c_str(), MAX_STRING_LEN);
+
+  EXEC SQL CONNECT :sUserName IDENTIFIED BY :sPassword USING :sDSN ; 
+  CHECK_ERROR;
+
+  mIsOpened = 1; 
+  EXEC SQL AUTOCOMMIT OFF ; 
+  CHECK_ERROR;
+  
+
+  return 0;
+} 
+
+
+int Goldilocks :: buildQueryMap() 
+{
+  return 0;
+
+}
+
+
+int Goldilocks :: BeginTransaction ()  
+{
+  return SUCCESS ;
+}
+
+
+int Goldilocks :: Commit ()  
+{
+  EXEC SQL COMMIT ; 
+  CHECK_ERROR;
+
+  
+  return SUCCESS ;
+}
+
+
+int Goldilocks :: Rollback ()  
+{
+  EXEC SQL ROLLBACK;
+  CHECK_ERROR;
+
+  
+  return SUCCESS ;
+}
+
+int Goldilocks :: CloseDatabase ()  
+{
+
+  if ( mIsOpened ) 
+  {
+    EXEC SQL ROLLBACK ; 
+    CHECK_ERROR;
+    EXEC SQL DISCONNECT ;
+    CHECK_ERROR;
+  }
+  return SUCCESS ;
+}
+
+
+int Goldilocks :: InsertNewRequest ( DBRequest* aRequest ) 
+{
+  EXEC SQL BEGIN DECLARE SECTION ;
+  DBRequest *sInRecord;
+  EXEC SQL END   DECLARE SECTION ;
+
+  sInRecord = aRequest;
+
+  EXEC SQL SELECT TICKET_SEQ.NEXTVAL INTO :sInRecord->mTicketNo FROM DUAL ;
+  CHECK_ERROR;
+
+  EXEC SQL INSERT INTO FILL_REQUEST (COIN, TICKET_NO, REQ_TIME, POSITION,
+                                     PRICE, REQ_QTY, AVAIL_QTY, PROCESS,
+                                     ORDER_TYPE, ORDER_NO ) 
+      VALUES ( :sInRecord->mCoin, :sInRecord->mTicketNo, SYSTIMESTAMP,
+               :sInRecord->mPosition, :sInRecord->mPrice, :sInRecord->mQty,
+               :sInRecord->mQty, :sInRecord->mProcess, :sInRecord->mOrderType, 
+               :sInRecord->mOrderNo ) ;
+  CHECK_ERROR;
+  
+  
+
+  return 0; 
+}
+
+int Goldilocks :: FindMatchRecords (DBRequest* aRequest, 
+                                    ResultVector& aVector ) 
+{
+  EXEC SQL BEGIN DECLARE SECTION ;
+  DBRequest *sInRecord; 
+  DBRequest sOutRecord; 
+  EXEC SQL END   DECLARE SECTION ;
+
+  sInRecord = aRequest;
+
+  BCMath sTotal ( 0 ) ; 
+  BCMath sRequestQty ( std::string( sInRecord->mQty ) ) ;
+
+  if ( sInRecord->mOrderType == MARKET_ORDER ) 
+  {
+
+    switch ( sInRecord->mPosition ) 
+    {
+      case ASK : 
+        sInRecord->mPrice = 0 ;  
+        break; 
+      case BID : 
+        sInRecord->mPrice = 10000000000 ; 
+        break; 
+    } 
+  }
+  
+
+  EXEC SQL 
+      DECLARE SELECT_CURSOR CURSOR FOR 
+       SELECT  /*+ INDEX (X, IDX_FILL_REQUEST_ASK) */
+              COIN, 
+              TICKET_NO, 
+              POSITION, 
+              PRICE, 
+              REQ_QTY, 
+              AVAIL_QTY, 
+              PROCESS, 
+              ORDER_TYPE, 
+              ORDER_NO
+       FROM   FILL_REQUEST X
+       WHERE  X.POSITION = 0
+        AND   X.COIN = :sInRecord->mCoin
+        AND   X.PROCESS = 1 
+        AND   X.AVAIL_QTY > 0 
+        AND   X.PRICE <= :sInRecord->mPrice 
+        AND   1 = :sInRecord->mPosition 
+       UNION ALL 
+       SELECT /*+ INDEX (X, IDX_FILL_REQUEST_BID) */
+              COIN, 
+              TICKET_NO, 
+              POSITION, 
+              PRICE, 
+              REQ_QTY, 
+              AVAIL_QTY, 
+              PROCESS, 
+              ORDER_TYPE, 
+              ORDER_NO
+       FROM   FILL_REQUEST X
+       WHERE  X.POSITION = 1
+        AND   X.COIN = :sInRecord->mCoin
+        AND   X.PROCESS = 1 
+        AND   X.AVAIL_QTY > 0 
+        AND   X.PRICE >= :sInRecord->mPrice
+        AND   0 = :sInRecord->mPosition
+        ; 
+
+
+
+  CHECK_ERROR;
+  EXEC SQL OPEN SELECT_CURSOR ; 
+
+  
+
+  while ( true ) 
+  {
+    EXEC SQL FETCH NEXT SELECT_CURSOR INTO :sOutRecord; 
+    if ( sqlca.sqlcode == SQL_NO_DATA ) 
+    {
+      break; 
+    } 
+    
+    BCMath sToSum ( std::string ( sOutRecord.mAvailQty ) ) ;
+    sTotal = sTotal + sToSum ;
+    aVector.push_back ( sOutRecord ) ;
+    if ( sRequestQty > sTotal ) 
+    {
+      continue; 
+    }     
+    break; 
+  }
+
+  EXEC SQL CLOSE SELECT_CURSOR ; 
+  CHECK_ERROR;
+
+
+  
+  return 0; 
+}
+
+int Goldilocks :: AjustAvailQty (uint64 aNo, 
+                                 char*  aCoin, 
+                                 char*  aQty, 
+                                 int aProcess ) 
+{
+  EXEC SQL BEGIN DECLARE SECTION ;
+  uint64 sNo;
+  char*   sQty; 
+  char*   sCoin;
+  int    sProcess ;
+  EXEC SQL END   DECLARE SECTION ;
+
+  sNo = aNo ;
+  sProcess = aProcess;
+  sQty = aQty; 
+  sCoin = aCoin;
+
+
+
+  EXEC SQL UPDATE FILL_REQUEST  
+           SET AVAIL_QTY = :sQty, PROCESS= :sProcess 
+           WHERE  COIN = :sCoin AND TICKET_NO = :sNo;
+
+  CHECK_ERROR;
+
+  return 0 ;
+}  
+
+int Goldilocks :: CloseRequest  (uint64 aNo, char* aCoin )
+{
+
+  EXEC SQL BEGIN DECLARE SECTION ;
+  uint64 sNo;
+  char   *sCoin; 
+  EXEC SQL END   DECLARE SECTION ;
+
+  sNo = aNo ;
+  sCoin = aCoin ;
+
+  EXEC SQL UPDATE FILL_REQUEST 
+           SET AVAIL_QTY = 0, PROCESS = 2 
+           WHERE COIN = :sCoin AND TICKET_NO = :sNo ;
+
+  CHECK_ERROR;
+  
+  return 0 ;
+}
+
+int Goldilocks :: BuildFill (char *aCoin, 
+                             uint64 aPrice, 
+                             char * aQty, 
+                             uint64 aReqID, 
+                             uint64 aOppositeID ) 
+{
+  EXEC SQL BEGIN DECLARE SECTION ;
+
+  uint64 sPrice;
+  char   *sCoin ;
+  char   sQty[MAX_FLOATING_LENGTH]; 
+  uint64 sReqID;
+  uint64 sOppositeID; 
+
+  EXEC SQL END   DECLARE SECTION ;
+
+
+  sCoin = aCoin;
+  sPrice = aPrice ;
+  strncpy ( sQty, aQty, MAX_FLOATING_LENGTH ) ;
+  sReqID = aReqID; 
+  sOppositeID = aOppositeID;
+
+
+  EXEC SQL INSERT INTO FILL_HISTORY 
+      (COIN, FILL_TIME, PRICE , QTY, TICKET_NO, OPPOSITE_TICKET_NO ) 
+      VALUES 
+      (:sCoin, SYSTIMESTAMP, :sPrice, :sQty, :sReqID, :sOppositeID ) ;
+
+  CHECK_ERROR;
+
+
+  
+  return 0 ;
+
+}
+
+int Goldilocks :: GetOfferStatus (OfferVector &aVector )
+{
+  /*
+
+  EXEC SQL BEGIN DECLARE SECTION ;
+  Offer sOffer; 
+  char *sQuery; 
+  EXEC SQL END  DECLARE SECTION ;
+
+  memset (&sOffer, 0x00, sizeof(Offer )) ;
+  sQuery = mQueryMap ["SELECT_STATUS"] ;
+
+  EXEC SQL PREPARE SELECT_STMT2 FROM :sQuery ; 
+  CHECK_ERROR;
+  
+  EXEC SQL DECLARE SELECT_CURSOR2 CURSOR FOR SELECT_STMT2 ; 
+  CHECK_ERROR;
+  
+  EXEC SQL OPEN SELECT_CURSOR2  ;
+  CHECK_ERROR;
+  
+
+  while ( true ) 
+  {
+    EXEC SQL FETCH NEXT SELECT_CURSOR2 INTO :sOffer; 
+    if ( sqlca.sqlcode == SQL_NO_DATA ) 
+    {
+      break; 
+    } 
+    aVector.push_back ( sOffer ) ;
+  }
+
+  EXEC SQL CLOSE SELECT_CURSOR2 ; 
+  CHECK_ERROR;
+  */
+
+  return 0; 
+} 
+
+
+
+}
+
