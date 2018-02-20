@@ -72,16 +72,16 @@ int BaseExchange :: FillRequest ( const Request& aRequest, uint64 &aReqNo )
     mDB->Rollback() ;
     throw ExchangeException ( "empty order book. could not place a market order.") ;
   }
-  
+
   // Found to match
-  
+
   for (auto it = sVector.begin(); it != sVector.end() ; ++it) 
   {
 
     BCMath sLeft  ( std::string( sDBRequest.mAvailQty) ) ; 
     BCMath sRight ( std::string( it->mAvailQty ) ) ; 
 
-    
+
     if ( sLeft > sRight ) {
       sCompareResult = 1; 
     } else if ( sLeft < sRight ) {
@@ -92,7 +92,7 @@ int BaseExchange :: FillRequest ( const Request& aRequest, uint64 &aReqNo )
 
     if ( sCompareResult == 1  ) 
     {
-                           
+
 
       BCMath sResult = sLeft - sRight ;
       sRC = mDB->AjustAvailQty (sDBRequest.mTicketNo, 
@@ -156,7 +156,7 @@ int BaseExchange :: FillRequest ( const Request& aRequest, uint64 &aReqNo )
   }
 
   // if market order,  cancel the request placed order with the left quantity. 
-    
+
   return mDB->Commit () ;
 
 } 

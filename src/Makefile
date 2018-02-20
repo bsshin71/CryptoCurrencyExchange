@@ -14,11 +14,10 @@ all :
 	${CXX} ${CXXFLAGS} -c BCMath.cc ${INC}
 	${CXX} ${CXXFLAGS} -c BaseExchange.cc ${INC}
 	${CXX} ${CXXFLAGS} -c PlaceOrder.cc ${INC}
+	${CXX} ${CXXFLAGS} -c PerfTest.cc ${INC}
 	${CXX} ${CXXFLAGS} -o PlaceOrder.exe  DB.o Exchange.o Goldilocks.o BaseExchange.o PlaceOrder.o BCMath.o ${INC} ${LIBS} ${LIB_DIR}
+	${CXX} ${CXXFLAGS} -o PerfTest.exe  DB.o Exchange.o Goldilocks.o BaseExchange.o PerfTest.o BCMath.o ${INC} ${LIBS} ${LIB_DIR}
 
-
-	
-	
 
 clean : 
-	rm -f *.o Goldilocks.cc UnitTest *.out  PlaceOrder.exe ExceptionTest PTest
+	rm -f *.o Goldilocks.cc UnitTest *.out  PlaceOrder ExceptionTest PTest *.exe
